@@ -1,0 +1,170 @@
+services:
+  backend:
+    build:
+      target: development
+      args:
+        - ENVIRONMENT=development
+        - CARGO_BUILD_JOBS=4
+    volumes:
+      - ./src:/app/src
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-deps-checksum:/app/.cargo_checksum
+    command: sh -c "cargo watch -x check -x clippy -x test -x run"
+    environment:
+      - RUST_LOG=debug
+      - VALIDATE_DEPS_STARTUP=true
+      - CARGO_AUDIT_LEVEL=low
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "9500:8000"
+    env_file:
+      - ./.env.podman
+
+  test:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      target: testing
+      args:
+        - ENVIRONMENT=testing
+    volumes:
+      - ./src:/app/src
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-deps-checksum:/app/.cargo_checksum
+    command: cargo nextest run --no-fail-fast
+    environment:
+      - RUST_LOG=debug
+      - DATABASE_URL=postgres://ann:123@postgres:5432/realtime-blog-test
+      - VALIDATE_DEPS_STARTUP=true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    depends_on:
+      - postgres
+      - redis
+
+  coverage:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      target: testing
+      args:
+        - ENVIRONMENT=testing
+    volumes:
+      - ./src:/app/src
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - ./target:/app/target
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-deps-checksum:/app/.cargo_checksum
+    command: cargo tarpaulin --out Xml --output-dir ./target/coverage/
+    environment:
+      - RUST_LOG=debug
+      - DATABASE_URL=postgres://ann:123@postgres:5432/realtime-blog-test
+      - VALIDATE_DEPS_STARTUP=true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    depends_on:
+      - postgres
+      - redis
+
+  # Service for dependency validation
+  deps-check:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      target: testing
+    volumes:
+      - ./src:/app/src
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo-cache:/usr/local/cargo/registry
+    command: >
+      sh -c "
+        cargo fetch --locked &&
+        cargo audit &&
+        cargo clippy -- -D warnings &&
+        echo '✅ All dependency checks passed!'
+      "
+    environment:
+      - RUST_LOG=info
+      - CARGO_AUDIT_LEVEL=medium
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Add Redis service definition
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6549:6379"
+    volumes:
+      - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Add Postgres service definition
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    env_file:
+      - ./.env.podman
+    ports:
+      - "5442:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ann -d realtime-blog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  redis-data:
+  cargo-cache:
+  cargo-deps-checksum: 

@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Database service
+  postgres:
+    container_name: blog_postgres_dev
+    image: timescale/timescaledb:latest-pg16
+    ports:
+      - "5442:5432"
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=blog_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis cache service
+  redis:
+    container_name: blog_redis_dev
+    image: redis:7.2-alpine
+    ports:
+      - "6549:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data: 
